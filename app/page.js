@@ -6,11 +6,14 @@ import Image from "next/image";
 export default function Home() {
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+
+  // Optional fields (not mandatory)
   const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerNumber, setCustomerNumber] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
+
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
   const [copyStatus, setCopyStatus] = useState("idle");
@@ -39,6 +42,7 @@ export default function Home() {
 
   async function tapToCopy() {
     if (!link) return;
+
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(link);
@@ -54,28 +58,36 @@ export default function Home() {
     }
   }
 
-  async function generate() {
+  async function generateLink() {
     setError("");
     setLink("");
     setCopyStatus("idle");
 
     const enteredAmount = Number(amount);
+
     if (!description.trim()) return setError("Please enter a description.");
     if (!Number.isFinite(enteredAmount) || enteredAmount <= 0)
       return setError("Please enter a valid amount > 0.");
 
+    // Payment API expects minor units (fils)
     const apiAmount = Math.round(enteredAmount * 100);
+
     setLoading(true);
     try {
       const res = await fetch("/api/create-link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: description.trim(), amount: apiAmount }),
+        body: JSON.stringify({
+          description: description.trim(),
+          amount: apiAmount,
+        }),
       });
+
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed");
 
       setLink(data.paymentUrl);
+
       const ok = await tryAutoCopy(data.paymentUrl);
       setTimeout(() => selectLink(), 50);
       setCopyStatus(ok ? "success" : "failed");
@@ -86,256 +98,181 @@ export default function Home() {
     }
   }
 
-  async function imageUrlToBase64(url) {
-    const res = await fetch(url);
-    const blob = await res.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  async function generateInvoicePDF() {
+  async function generatePdf() {
+    setError("");
     const enteredAmount = Number(amount);
+
     if (!description.trim()) return setError("Please enter a description.");
     if (!Number.isFinite(enteredAmount) || enteredAmount <= 0)
       return setError("Please enter a valid amount > 0.");
 
-    setError("");
     setPdfLoading(true);
-
     try {
-      // ── The correct way to import pdfmake in Next.js ──────────────────
-      // Must import the browser build explicitly to avoid SSR issues
-      const pdfMakeModule = await import("pdfmake/build/pdfmake");
-      const pdfMake = pdfMakeModule.default ?? pdfMakeModule;
-
-      const pdfFontsModule = await import("pdfmake/build/vfs_fonts");
-      const pdfFonts = pdfFontsModule.default ?? pdfFontsModule;
-
-      // Attach fonts — works for both older and newer pdfmake versions
-      if (pdfFonts.pdfMake?.vfs) {
-        pdfMake.vfs = pdfFonts.pdfMake.vfs;
-      } else if (pdfFonts.vfs) {
-        pdfMake.vfs = pdfFonts.vfs;
-      } else {
-        pdfMake.vfs = pdfFonts;
-      }
-      // ─────────────────────────────────────────────────────────────────
-
-      const templateBase64 = await imageUrlToBase64("/invoice-template.png");
-
-      const now = new Date();
-      const invoiceNumber =
-        "INV-" +
-        now.getFullYear() +
-        String(now.getMonth() + 1).padStart(2, "0") +
-        String(now.getDate()).padStart(2, "0") +
-        "-" +
-        Math.floor(1000 + Math.random() * 9000);
-
-      const invoiceDate = now.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
+      const res = await fetch("/api/invoice-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName: customerName.trim(),
+          customerNumber: customerNumber.trim(),
+          description: description.trim(),
+          amountAed: enteredAmount,     // PDF uses AED as typed
+          paymentUrl: link || "",       // include if exists
+        }),
       });
 
-      const TEXT_COLOR = "#1a1a2e";
-      const FONT_SIZE = 10;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error || "Failed to generate PDF");
+      }
 
-      const docDefinition = {
-        pageSize: "A4",
-        pageMargins: [0, 0, 0, 0],
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
 
-        background: () => ({
-          image: templateBase64,
-          width: 595,
-          height: 842,
-          absolutePosition: { x: 0, y: 0 },
-        }),
+      // iPhone: open in new tab (best behavior)
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (isIOS) {
+        window.open(url, "_blank");
+        return;
+      }
 
-        content: [
-          {
-            text: invoiceNumber,
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 370, y: 62 },
-          },
-          {
-            text: invoiceDate,
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 370, y: 81 },
-          },
-          {
-            text: customerName.trim() || "—",
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 200, y: 258 },
-          },
-          {
-            text: customerPhone.trim() || "—",
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 218, y: 277 },
-          },
-          {
-            text: description.trim(),
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 30, y: 358 },
-          },
-          {
-            text: `AED ${enteredAmount.toFixed(2)}`,
-            fontSize: FONT_SIZE,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 460, y: 358 },
-          },
-          {
-            text: `AED ${enteredAmount.toFixed(2)}`,
-            fontSize: FONT_SIZE + 1,
-            bold: true,
-            color: TEXT_COLOR,
-            absolutePosition: { x: 460, y: 448 },
-          },
-        ],
-
-        defaultStyle: { font: "Helvetica" },
-      };
-
-      pdfMake.createPdf(docDefinition).download(`${invoiceNumber}.pdf`);
+      // Desktop: download file
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "invoice.pdf";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
     } catch (e) {
-      setError("PDF error: " + e.message);
+      setError(e.message);
     } finally {
       setPdfLoading(false);
     }
   }
-
-  const inputStyle = {
-    width: "calc(100% - 28px)",
-    display: "block",
-    margin: "10px auto 24px",
-    padding: 14,
-    fontSize: 18,
-    borderRadius: 12,
-    border: "1.5px solid #d1d5db",
-    outline: "none",
-  };
-
-  const labelStyle = {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#374151",
-  };
-
-  const btnBase = {
-    width: "100%",
-    display: "block",
-    padding: "18px",
-    fontSize: 18,
-    color: "white",
-    border: "none",
-    borderRadius: 14,
-    cursor: "pointer",
-  };
 
   return (
     <main
       style={{
         maxWidth: 650,
         margin: "0 auto",
-        padding: "40px 18px calc(40px + env(safe-area-inset-bottom))",
+        padding: "40px 18px calc(60px + env(safe-area-inset-bottom))",
         fontFamily: "Arial, sans-serif",
       }}
     >
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
+      {/* Logo centered */}
+      <div style={{ textAlign: "center", marginBottom: 18 }}>
         <Image
           src="/logo.png"
-          alt="AE Logo"
-          width={140}
-          height={140}
+          alt="AE Tickets"
+          width={120}
+          height={120}
           priority
           style={{ margin: "0 auto", display: "block" }}
         />
       </div>
 
-      <h2 style={{ marginBottom: 30, textAlign: "center" }}>
+      <h2 style={{ marginBottom: 26, textAlign: "center" }}>
         N-Genius Payment Link Generator
       </h2>
 
-      <label style={labelStyle}>Description</label>
+      <label>Customer Name (optional)</label>
+      <input
+        value={customerName}
+        onChange={(e) => setCustomerName(e.target.value)}
+        placeholder="e.g., Ahmed"
+        style={{
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "10px auto 18px",
+          padding: 14,
+          fontSize: 16,
+          borderRadius: 12,
+        }}
+      />
+
+      <label>Customer Number (optional)</label>
+      <input
+        value={customerNumber}
+        onChange={(e) => setCustomerNumber(e.target.value)}
+        placeholder="e.g., +97150xxxxxxx"
+        style={{
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "10px auto 24px",
+          padding: 14,
+          fontSize: 16,
+          borderRadius: 12,
+        }}
+      />
+
+      <label>Description</label>
       <input
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="e.g., AE Tickets - Arsenal vs City"
-        style={inputStyle}
+        style={{
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "10px auto 24px",
+          padding: 14,
+          fontSize: 18,
+          borderRadius: 12,
+        }}
       />
 
-      <label style={labelStyle}>Amount (AED)</label>
+      <label>Amount (AED)</label>
       <input
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         placeholder="e.g., 260"
         type="number"
-        style={inputStyle}
-      />
-
-      <div style={{ borderTop: "1.5px solid #e5e7eb", margin: "0 0 24px" }} />
-
-      <label style={labelStyle}>
-        Customer Name{" "}
-        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>(optional)</span>
-      </label>
-      <input
-        value={customerName}
-        onChange={(e) => setCustomerName(e.target.value)}
-        placeholder="e.g., Ahmed Al Mansoori"
-        style={inputStyle}
-      />
-
-      <label style={labelStyle}>
-        Customer Phone{" "}
-        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>(optional)</span>
-      </label>
-      <input
-        value={customerPhone}
-        onChange={(e) => setCustomerPhone(e.target.value)}
-        placeholder="e.g., +971 50 123 4567"
-        type="tel"
-        style={inputStyle}
+        style={{
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "10px auto 28px",
+          padding: 14,
+          fontSize: 18,
+          borderRadius: 12,
+        }}
       />
 
       <button
-        onClick={generate}
+        onClick={generateLink}
         disabled={loading}
         style={{
-          ...btnBase,
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "0 auto 14px",
+          padding: "16px 18px",
+          fontSize: 18,
           background: "#2f5ec4",
-          marginBottom: 14,
-          opacity: loading ? 0.7 : 1,
-          cursor: loading ? "not-allowed" : "pointer",
+          color: "white",
+          border: "none",
+          borderRadius: 14,
         }}
       >
         {loading ? "Generating..." : "Generate Link"}
       </button>
 
       <button
-        onClick={generateInvoicePDF}
+        onClick={generatePdf}
         disabled={pdfLoading}
         style={{
-          ...btnBase,
-          background: "#0f172a",
-          marginBottom: 24,
-          opacity: pdfLoading ? 0.7 : 1,
-          cursor: pdfLoading ? "not-allowed" : "pointer",
+          width: "calc(100% - 24px)",
+          display: "block",
+          margin: "0 auto 18px",
+          padding: "16px 18px",
+          fontSize: 18,
+          background: "#111827",
+          color: "white",
+          border: "none",
+          borderRadius: 14,
         }}
       >
-        {pdfLoading ? "Generating PDF…" : "📄 Generate Invoice PDF"}
+        {pdfLoading ? "Creating PDF..." : "Generate PDF Invoice"}
       </button>
 
-      {error && <p style={{ color: "crimson", marginTop: 16 }}>{error}</p>}
+      {error && <p style={{ color: "crimson", marginTop: 10 }}>{error}</p>}
 
       {link && (
         <div style={{ marginTop: 10 }}>
@@ -344,20 +281,42 @@ export default function Home() {
               Copied ✅
             </p>
           )}
+
           <input
             ref={linkInputRef}
             value={link}
             readOnly
-            style={{ ...inputStyle, fontSize: 14, marginBottom: 14 }}
+            style={{
+              width: "calc(100% - 24px)",
+              display: "block",
+              margin: "10px auto 16px",
+              padding: 14,
+              fontSize: 14,
+              borderRadius: 12,
+            }}
           />
+
           <button
             onClick={tapToCopy}
-            style={{ ...btnBase, background: "#0f172a", marginBottom: 24 }}
+            style={{
+              width: "calc(100% - 24px)",
+              display: "block",
+              margin: "0 auto",
+              padding: "16px 14px",
+              fontSize: 18,
+              background: "#0f172a",
+              color: "white",
+              border: "none",
+              borderRadius: 14,
+            }}
           >
             Tap to Copy
           </button>
         </div>
       )}
+
+      {/* extra iPhone bottom space */}
+      <div style={{ height: "calc(120px + env(safe-area-inset-bottom))" }} />
     </main>
   );
 }
