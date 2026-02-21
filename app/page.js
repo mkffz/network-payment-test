@@ -17,8 +17,6 @@ export default function Home() {
 
   const linkInputRef = useRef(null);
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
-
   async function tryAutoCopy(text) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -56,20 +54,6 @@ export default function Home() {
     }
   }
 
-  // Fetch an image from /public and return a base64 data URL
-  async function imageUrlToBase64(url) {
-    const res = await fetch(url);
-    const blob = await res.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  // ── Generate Payment Link ────────────────────────────────────────────────
-
   async function generate() {
     setError("");
     setLink("");
@@ -102,7 +86,16 @@ export default function Home() {
     }
   }
 
-  // ── Generate Invoice PDF ─────────────────────────────────────────────────
+  async function imageUrlToBase64(url) {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
 
   async function generateInvoicePDF() {
     const enteredAmount = Number(amount);
@@ -114,14 +107,26 @@ export default function Home() {
     setPdfLoading(true);
 
     try {
-      const pdfMake = (await import("pdfmake/build/pdfmake")).default;
-      const pdfFonts = (await import("pdfmake/build/vfs_fonts")).default;
-      pdfMake.vfs = pdfFonts.vfs;
+      // ── The correct way to import pdfmake in Next.js ──────────────────
+      // Must import the browser build explicitly to avoid SSR issues
+      const pdfMakeModule = await import("pdfmake/build/pdfmake");
+      const pdfMake = pdfMakeModule.default ?? pdfMakeModule;
 
-      // Load the invoice template PNG from /public folder
+      const pdfFontsModule = await import("pdfmake/build/vfs_fonts");
+      const pdfFonts = pdfFontsModule.default ?? pdfFontsModule;
+
+      // Attach fonts — works for both older and newer pdfmake versions
+      if (pdfFonts.pdfMake?.vfs) {
+        pdfMake.vfs = pdfFonts.pdfMake.vfs;
+      } else if (pdfFonts.vfs) {
+        pdfMake.vfs = pdfFonts.vfs;
+      } else {
+        pdfMake.vfs = pdfFonts;
+      }
+      // ─────────────────────────────────────────────────────────────────
+
       const templateBase64 = await imageUrlToBase64("/invoice-template.png");
 
-      // Auto-generate invoice number & today's date
       const now = new Date();
       const invoiceNumber =
         "INV-" +
@@ -137,24 +142,13 @@ export default function Home() {
         year: "numeric",
       });
 
-      // ── Coordinate map ───────────────────────────────────────────────────
-      // Template image size: 1414 × 2000 px
-      // PDF A4 page size:     595 × 842 pt
-      // Scale factors:  sx = 595/1414 ≈ 0.4208  |  sy = 842/2000 ≈ 0.4210
-      //
-      // All absolutePosition values below were derived from pixel positions
-      // in the template image converted using the scale factors above.
-      // If text lands slightly off, adjust x/y here to fine-tune.
-      // ─────────────────────────────────────────────────────────────────────
-
       const TEXT_COLOR = "#1a1a2e";
-      const FONT_SIZE  = 10;
+      const FONT_SIZE = 10;
 
       const docDefinition = {
         pageSize: "A4",
         pageMargins: [0, 0, 0, 0],
 
-        // Full-page template image as background
         background: () => ({
           image: templateBase64,
           width: 595,
@@ -163,55 +157,42 @@ export default function Home() {
         }),
 
         content: [
-          // Invoice Number  (right of "Invoice Number:" label)
           {
             text: invoiceNumber,
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 370, y: 62 },
           },
-
-          // Invoice Date  (right of "Invoice Date:" label)
           {
             text: invoiceDate,
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 370, y: 81 },
           },
-
-          // Customer Name  (right of "Customer Name:" label)
           {
             text: customerName.trim() || "—",
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 200, y: 258 },
           },
-
-          // Customer Phone  (right of "Customer Number:" label)
           {
             text: customerPhone.trim() || "—",
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 218, y: 277 },
           },
-
-          // Description  (inside Description table cell)
           {
             text: description.trim(),
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 30, y: 358 },
           },
-
-          // Price  (inside Price table cell)
           {
             text: `AED ${enteredAmount.toFixed(2)}`,
             fontSize: FONT_SIZE,
             color: TEXT_COLOR,
             absolutePosition: { x: 460, y: 358 },
           },
-
-          // Total  (inside Total row)
           {
             text: `AED ${enteredAmount.toFixed(2)}`,
             fontSize: FONT_SIZE + 1,
@@ -231,8 +212,6 @@ export default function Home() {
       setPdfLoading(false);
     }
   }
-
-  // ── Styles ───────────────────────────────────────────────────────────────
 
   const inputStyle = {
     width: "calc(100% - 28px)",
@@ -262,8 +241,6 @@ export default function Home() {
     cursor: "pointer",
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────
-
   return (
     <main
       style={{
@@ -273,7 +250,6 @@ export default function Home() {
         fontFamily: "Arial, sans-serif",
       }}
     >
-      {/* Logo */}
       <div style={{ textAlign: "center", marginBottom: 20 }}>
         <Image
           src="/logo.png"
@@ -289,7 +265,6 @@ export default function Home() {
         N-Genius Payment Link Generator
       </h2>
 
-      {/* ── Main fields ── */}
       <label style={labelStyle}>Description</label>
       <input
         value={description}
@@ -307,15 +282,11 @@ export default function Home() {
         style={inputStyle}
       />
 
-      {/* ── Divider ── */}
       <div style={{ borderTop: "1.5px solid #e5e7eb", margin: "0 0 24px" }} />
 
-      {/* ── Optional customer fields ── */}
       <label style={labelStyle}>
         Customer Name{" "}
-        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>
-          (optional)
-        </span>
+        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>(optional)</span>
       </label>
       <input
         value={customerName}
@@ -326,9 +297,7 @@ export default function Home() {
 
       <label style={labelStyle}>
         Customer Phone{" "}
-        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>
-          (optional)
-        </span>
+        <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>(optional)</span>
       </label>
       <input
         value={customerPhone}
@@ -338,7 +307,6 @@ export default function Home() {
         style={inputStyle}
       />
 
-      {/* ── Buttons ── */}
       <button
         onClick={generate}
         disabled={loading}
@@ -367,12 +335,8 @@ export default function Home() {
         {pdfLoading ? "Generating PDF…" : "📄 Generate Invoice PDF"}
       </button>
 
-      {/* ── Error ── */}
-      {error && (
-        <p style={{ color: "crimson", marginTop: 16 }}>{error}</p>
-      )}
+      {error && <p style={{ color: "crimson", marginTop: 16 }}>{error}</p>}
 
-      {/* ── Generated link ── */}
       {link && (
         <div style={{ marginTop: 10 }}>
           {copyStatus === "success" && (
@@ -380,18 +344,12 @@ export default function Home() {
               Copied ✅
             </p>
           )}
-
           <input
             ref={linkInputRef}
             value={link}
             readOnly
-            style={{
-              ...inputStyle,
-              fontSize: 14,
-              marginBottom: 14,
-            }}
+            style={{ ...inputStyle, fontSize: 14, marginBottom: 14 }}
           />
-
           <button
             onClick={tapToCopy}
             style={{ ...btnBase, background: "#0f172a", marginBottom: 24 }}
